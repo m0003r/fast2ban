@@ -4,6 +4,7 @@ This is simple fail2ban-like replacement written in Rust.
 
 ## Usage:
 ```bash
+./banner # reads default config.toml from current directory
 ./banner <config.toml location>
 ```
 
