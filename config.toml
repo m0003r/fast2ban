@@ -1,0 +1,15 @@
+# log file to parse. Pass '-' to use stdin
+log_file = 'nginx.log'
+
+# regexp for parsing log file. Must contain groups <ip> and <DT>
+log_regex = '^(?P<ip>\d+\.\d+\.\d+\.\d+) - [^ ]+ \[(?P<DT>[^\]]+)\] "(\w+) (?P<addr>[^ ]*) HTTP/[\d.]+" (?P<code>\d+) \d+ "[^"]+" "[^"]+" "(?P<UA>[^"]+)'
+
+# maximum number of requests for specific IP for specific time period
+requests = 30
+
+# time period in seconds
+period = 30
+
+# date format (see https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html for syntax).
+# Note that timezone is required (because of using https://docs.rs/chrono/0.4.19/chrono/struct.DateTime.html#method.parse_from_str method)
+date_format = '%d/%B/%Y:%H:%M:%S %z'
