@@ -1,11 +1,11 @@
+use chrono::{DateTime, Duration, FixedOffset};
+use regex::Regex;
+use serde_derive::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env::args;
 use std::fs::File;
 use std::io::{self, prelude::*, BufReader};
 use std::net::IpAddr;
-use chrono::{DateTime, Duration, FixedOffset};
-use regex::Regex;
-use serde_derive::Deserialize;
 
 struct RingBanBuffer {
     last_queries: Vec<Option<DateTime<FixedOffset>>>,
@@ -41,11 +41,12 @@ struct Config {
     date_format: String,
 }
 
-
 // read config from TOML file and return a Config struct
 fn read_config(config_file: &str) -> Config {
-    let config_str = std::fs::read_to_string(config_file).expect(format!("Failed to read config file {}", config_file).as_str());
-    toml::from_str(&config_str).expect(format!("Failed to parse config file {}", config_file).as_str())
+    let config_str = std::fs::read_to_string(config_file)
+        .expect(format!("Failed to read config file {}", config_file).as_str());
+    toml::from_str(&config_str)
+        .expect(format!("Failed to parse config file {}", config_file).as_str())
 }
 
 fn main() -> io::Result<()> {
@@ -59,7 +60,9 @@ fn main() -> io::Result<()> {
     if config.log_file == "-" {
         reader = Box::new(BufReader::new(io::stdin()));
     } else {
-        reader = Box::new(BufReader::new(File::open(config.log_file).expect("Failed to open log file")));
+        reader = Box::new(BufReader::new(
+            File::open(config.log_file).expect("Failed to open log file"),
+        ));
     }
 
     if !&config.log_regex.contains("(?P<ip>") {
@@ -103,7 +106,10 @@ fn main() -> io::Result<()> {
             if banned.contains(&ip) {
                 continue;
             }
-            let duration = ban_tickets.entry(ip).or_insert(RingBanBuffer::new(config.requests)).add_query(dt);
+            let duration = ban_tickets
+                .entry(ip)
+                .or_insert(RingBanBuffer::new(config.requests))
+                .add_query(dt);
             if let Some(dur) = duration {
                 if dur < Duration::seconds(config.period as i64) {
                     banned.insert(ip);
@@ -112,7 +118,15 @@ fn main() -> io::Result<()> {
         }
     }
     let elapsed = start.elapsed();
-    eprintln!("elapsed {} ms, {} lines parsed, {} datetime errors, {} lines/s, banned = {}/{}", elapsed.as_millis(), line_count, dt_errors, line_count as f64 / (elapsed.as_millis() as f64 / 1000.0), banned.len(), ban_tickets.len());
+    eprintln!(
+        "elapsed {} ms, {} lines parsed, {} datetime errors, {} lines/s, banned = {}/{}",
+        elapsed.as_millis(),
+        line_count,
+        dt_errors,
+        line_count as f64 / (elapsed.as_millis() as f64 / 1000.0),
+        banned.len(),
+        ban_tickets.len()
+    );
 
     for i in banned {
         println!("{}", i);
