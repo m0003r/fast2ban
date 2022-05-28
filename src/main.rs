@@ -71,12 +71,30 @@ fn main() -> io::Result<()> {
     if !&config.log_regex.contains("(?P<DT>") {
         panic!("log_regex must contain (?P<DT> ... ) group for datetime");
     }
-    let re = Regex::new(&config.log_regex).expect("Failed to compile regex");
+    #[cfg(regex)]
+    {
+        let re = Regex::new(&config.log_regex).expect("Failed to compile regex");
+    }
+    let re_start = regex_automata::RegexBuilder::new()
+        .anchored(true)
+        .build(r#"\d+\.\d+\.\d+\.\d+"#)
+        .expect("Failed to compile regex");
+
+    let re_before_dt = regex_automata::RegexBuilder::new()
+        .anchored(true)
+        .build(r#" - [^ ]+ \["#)
+        .unwrap();
+
+    let re_dt = regex_automata::RegexBuilder::new()
+        .anchored(true)
+        .build(r#"[^\]]+\]"#)
+        .expect("Failed to compile regex");
+
 
     let start = std::time::Instant::now();
     // let mut uas = HashSet::new();
-    let mut banned = HashSet::new();
-    let mut ban_tickets = HashMap::new();
+    let mut banned = HashSet::<IpAddr>::new();
+    let mut ban_tickets = HashMap::<IpAddr, RingBanBuffer>::new();
     let mut line_count = 0;
     let mut dt_errors = 0;
 
@@ -85,45 +103,50 @@ fn main() -> io::Result<()> {
             eprintln!("Line read error, break!");
             break;
         }
-        let line = line?;
+        let line = line?.into_bytes();
         line_count += 1;
-        let captures = re.captures(&line);
-        if let Some(caps) = captures {
-            let dt = DateTime::parse_from_str(&caps["DT"], &config.date_format);
-            if let Err(_) = dt {
-                eprintln!("Failed to parse date {}", &caps["DT"]);
-                dt_errors += 1;
-                continue;
-            }
-            let dt = dt.unwrap();
-            //parse ip into ipv4
-            let ip = caps["ip"].parse();
-            if let Err(_) = ip {
-                eprintln!("Failed to parse ip {}", &caps["ip"]);
-                continue;
-            }
-            let ip: IpAddr = ip.unwrap();
-            if banned.contains(&ip) {
-                continue;
-            }
-            let duration = ban_tickets
-                .entry(ip)
-                .or_insert(RingBanBuffer::new(config.requests))
-                .add_query(dt);
-            if let Some(dur) = duration {
-                if dur < Duration::seconds(config.period as i64) {
-                    banned.insert(ip);
-                }
+        let (ip_start, ip_end) = re_start.find(&line).unwrap();
+        let (_, before_dt_start) = re_before_dt.find(&line[ip_end..]).unwrap();
+        let (dt_start, dt_end) = re_dt.find(&line[ip_end + before_dt_start..]).unwrap();
+        let raw_ip = String::from_utf8_lossy(&line[ip_start..ip_end]);
+        let raw_dt = String::from_utf8_lossy(&line[before_dt_start + dt_start + ip_end..before_dt_start + dt_end + ip_end - 1]);
+        // let captures = re.captures(&line);
+        // if let Some(caps) = captures {
+        let dt = DateTime::parse_from_str(&raw_dt, &config.date_format);
+        if let Err(_) = dt {
+            eprintln!("Failed to parse date {}", raw_dt);
+            dt_errors += 1;
+            continue;
+        }
+        let dt = dt.unwrap();
+        //parse ip into ipv4
+        let ip = raw_ip.parse();
+        if let Err(_) = ip {
+            eprintln!("Failed to parse ip {}", raw_ip);
+            continue;
+        }
+        let ip: IpAddr = ip.unwrap();
+        if banned.contains(&ip) {
+            continue;
+        }
+        let duration = ban_tickets
+            .entry(ip)
+            .or_insert(RingBanBuffer::new(config.requests))
+            .add_query(dt);
+        if let Some(dur) = duration {
+            if dur < Duration::seconds(config.period as i64) {
+                banned.insert(ip);
             }
         }
     }
+
     let elapsed = start.elapsed();
     eprintln!(
         "elapsed {} ms, {} lines parsed, {} datetime errors, {} lines/s, banned = {}/{}",
         elapsed.as_millis(),
         line_count,
         dt_errors,
-        line_count as f64 / (elapsed.as_millis() as f64 / 1000.0),
+        line_count as f64 / (elapsed.as_nanos() as f64 / 1_000_000_000.0),
         banned.len(),
         ban_tickets.len()
     );
