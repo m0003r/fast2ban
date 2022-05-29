@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime};
 use regex::Regex;
 use serde_derive::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -8,7 +8,7 @@ use std::io::{self, prelude::*, BufReader};
 use std::net::IpAddr;
 
 struct RingBanBuffer {
-    last_queries: Vec<Option<DateTime<FixedOffset>>>,
+    last_queries: Vec<Option<NaiveTime>>,
     last_query_index: usize,
 }
 
@@ -20,7 +20,7 @@ impl RingBanBuffer {
         }
     }
 
-    fn add_query(&mut self, query: DateTime<FixedOffset>) -> Option<Duration> {
+    fn add_query(&mut self, query: NaiveTime) -> Option<Duration> {
         self.last_queries[self.last_query_index] = Some(query);
         self.last_query_index = (self.last_query_index + 1) % self.last_queries.len();
 
@@ -82,12 +82,12 @@ fn main() -> io::Result<()> {
 
     let re_before_dt = regex_automata::RegexBuilder::new()
         .anchored(true)
-        .build(r#" - [^ ]+ \["#)
+        .build(r#" - [^ ]+ \[[^/]+/[^/]+/[^:]+:"#)
         .unwrap();
 
     let re_dt = regex_automata::RegexBuilder::new()
         .anchored(true)
-        .build(r#"[^\]]+\]"#)
+        .build(r#"[^ ]+"#)
         .expect("Failed to compile regex");
 
 
@@ -98,12 +98,12 @@ fn main() -> io::Result<()> {
     let mut line_count = 0;
     let mut dt_errors = 0;
 
-    for line in reader.lines() {
+    for line in reader.split(b'\n') {
         if let Err(_) = line {
             eprintln!("Line read error, break!");
             break;
         }
-        let line = line?.into_bytes();
+        let line = line?;
         line_count += 1;
         let (ip_start, ip_end) = re_start.find(&line).unwrap();
         let (_, before_dt_start) = re_before_dt.find(&line[ip_end..]).unwrap();
@@ -112,7 +112,7 @@ fn main() -> io::Result<()> {
         let raw_dt = String::from_utf8_lossy(&line[before_dt_start + dt_start + ip_end..before_dt_start + dt_end + ip_end - 1]);
         // let captures = re.captures(&line);
         // if let Some(caps) = captures {
-        let dt = DateTime::parse_from_str(&raw_dt, &config.date_format);
+        let dt = NaiveTime::parse_from_str(&raw_dt, "%H:%M:%S");
         if let Err(_) = dt {
             eprintln!("Failed to parse date {}", raw_dt);
             dt_errors += 1;
