@@ -36,6 +36,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "lazy_static",
+ "memchr",
  "regex",
  "regex-automata",
  "serde",

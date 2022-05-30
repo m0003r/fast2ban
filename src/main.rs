@@ -1,5 +1,6 @@
 #![feature(portable_simd)]
 
+use memchr::memchr;
 use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -104,7 +105,7 @@ fn init_shuffle_table() {
     }
 }
 
-static mut SHUFFLE_TABLE: [__m128i; 65536] = [unsafe{transmute(0_i128)}; 65536];
+static mut SHUFFLE_TABLE: [__m128i; 65536] = [unsafe { transmute(0_i128) }; 65536];
 
 unsafe fn print_m128i(m: __m128i) {
     let mut v = [0_u8; 16];
@@ -132,20 +133,16 @@ fn parse_ip_simd(x: &[u8]) -> IpAddr {
 }
 
 fn parse_line_automata(line: &[u8]) -> Option<(IpAddr, NaiveTime)> {
-    let mut cur_grp = 0u32;
     let mut time = 0u32;
     let mut cur_time = 0u32;
 
     let mut iter = line.iter();
     let ip = parse_ip_simd(&line[..16]);
 
-    let iter = iter
-        .skip(8)
-        .skip_while(|c| **c != b' ')
-        .skip(3)
-        .skip_while(|c| **c != b' ')
-        .skip_while(|c| **c != b':');
-    for c in iter {
+    let first_space = memchr(b' ', &line[7..]).unwrap() + 7;
+    let second_space = memchr(b' ', &line[(first_space + 3)..]).unwrap() + first_space + 3;
+    let time_begin = memchr(b':', &line[second_space..]).unwrap() + second_space;
+    for c in iter.skip(time_begin + 1) {
         if *c == b':' {
             time = time * 60 + cur_time;
             cur_time = 0;
