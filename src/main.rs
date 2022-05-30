@@ -1,3 +1,4 @@
+#![feature(stdsimd)]
 #![feature(portable_simd)]
 
 use memchr::memchr;
@@ -132,6 +133,22 @@ fn parse_ip_simd(x: &[u8]) -> IpAddr {
     IpAddr::V4(Ipv4Addr::from(result))
 }
 
+fn parse_time_simd(x: &[u8]) -> u32 {
+    let result: u32;
+    unsafe {
+        let input = _mm_loadu_si64(x.as_ptr() as *const _);
+        let input = _mm_sub_epi8(input, _mm_set1_epi8(b'0' as i8));
+        let input = _mm_shuffle_epi8(input, _mm_set_epi8(7, 6, 4, 3, -1, -1, -1,  -1, 1, 0, -1, -1, -1,-1, -1, -1));
+        let coeffs = _mm_set_epi8(1, 10, 1, 10, 1, 10, 0, 0, 1, 10, 0, 0, 0, 0, 0, 0);
+        let prod = _mm_maddubs_epi16(coeffs, input);
+        let prod2 = _mm_madd_epi16(prod, _mm_set_epi8(0, 1, 0, 60, 0, 0, 0, 0, 14, 16, 0, 0, 0, 0, 0, 0));
+        let ms: u32 = transmute(_mm_extract_epi32::<1>(prod2));
+        let h: u32 = transmute(_mm_extract_epi32::<3>(prod2));
+        result = ms + h
+    }
+    result
+}
+
 fn parse_line_automata(line: &[u8]) -> Option<(IpAddr, NaiveTime)> {
     let mut time = 0u32;
     let mut cur_time = 0u32;
@@ -141,19 +158,8 @@ fn parse_line_automata(line: &[u8]) -> Option<(IpAddr, NaiveTime)> {
 
     let first_space = memchr(b' ', &line[7..]).unwrap() + 7;
     let second_space = memchr(b' ', &line[(first_space + 3)..]).unwrap() + first_space + 3;
-    let time_begin = memchr(b':', &line[second_space..]).unwrap() + second_space;
-    for c in iter.skip(time_begin + 1) {
-        if *c == b':' {
-            time = time * 60 + cur_time;
-            cur_time = 0;
-            continue;
-        }
-        if *c == b' ' {
-            break;
-        }
-        cur_time = cur_time * 10 + (*c - b'0') as u32;
-    }
-    time = time * 60 + cur_time;
+    let time_begin = memchr(b':', &line[second_space..]).unwrap() + second_space + 1;
+    let time = parse_time_simd(&line[time_begin..time_begin + 8]);
     let time: NaiveTime = NaiveTime::from_num_seconds_from_midnight(time, 0);
     Some((ip, time))
 }
@@ -170,6 +176,19 @@ mod tests {
         let (ip, time) = super::parse_line_automata(line).unwrap();
         assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(118, 174, 114, 113)));
         assert_eq!(time, NaiveTime::from_hms(10, 36, 11));
+    }
+
+    #[test]
+    fn test_time_simd() {
+        for h in 0..24 {
+            for m in 0..60 {
+                for s in 0..60 {
+                    let time_str = format!("{:02}:{:02}:{:02}", h, m, s);
+                    let time_simd = super::parse_time_simd(time_str.as_bytes());
+                    assert_eq!(h*3600+m*60+s, time_simd);
+                }
+            }
+        }
     }
 }
 
