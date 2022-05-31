@@ -15,6 +15,7 @@ use std::io::{self, prelude::*, BufReader};
 use std::mem::transmute;
 use std::net::{IpAddr, Ipv4Addr};
 use std::simd::u64x2;
+use memmap::MmapOptions;
 
 struct RingBanBuffer {
     last_queries: Vec<Option<NaiveTime>>,
@@ -150,10 +151,6 @@ fn parse_time_simd(x: &[u8]) -> u32 {
 }
 
 fn parse_line_automata(line: &[u8]) -> Option<(IpAddr, NaiveTime)> {
-    let mut time = 0u32;
-    let mut cur_time = 0u32;
-
-    let mut iter = line.iter();
     let ip = parse_ip_simd(&line[..16]);
 
     let first_space = memchr(b' ', &line[7..]).unwrap() + 7;
@@ -205,7 +202,7 @@ fn main() -> io::Result<()> {
         reader = Box::new(BufReader::new(io::stdin()));
     } else {
         reader = Box::new(BufReader::new(
-            File::open(config.log_file).expect("Failed to open log file"),
+            File::open(&config.log_file).expect("Failed to open log file"),
         ));
     }
 
@@ -242,12 +239,21 @@ fn main() -> io::Result<()> {
     let mut line_count = 0;
     let mut dt_errors = 0;
 
-    for line in reader.split(b'\n') {
-        if let Err(_) = line {
-            eprintln!("Line read error, break!");
+    let reader = unsafe { MmapOptions::new().map(&File::open(&config.log_file)?)? };
+    let len = reader.len();
+    let mut start_pos = 0;
+    loop {
+        let next_line = memchr(b'\n', &reader[start_pos..len]);
+        if next_line.is_none() {
             break;
         }
-        let line = line?;
+        let line = &reader[start_pos..start_pos + next_line.unwrap()];
+        start_pos += next_line.unwrap() + 1;
+        // if let Err(_) = line {
+        //     eprintln!("Line read error, break!");
+        //     break;
+        // }
+        // let line = line?;
         line_count += 1;
         #[cfg(regex_automata)]
         {
