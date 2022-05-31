@@ -2,7 +2,7 @@
 pub(crate) struct RingBanBuffer {
     last_queries: Vec<Option<i64>>,
     last_query_index: usize,
-    pub banned: bool
+    pub banned: bool,
 }
 
 impl RingBanBuffer {
@@ -10,7 +10,7 @@ impl RingBanBuffer {
         RingBanBuffer {
             last_queries: vec![None; ring_size],
             last_query_index: 0,
-            banned: false
+            banned: false,
         }
     }
 

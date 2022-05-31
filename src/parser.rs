@@ -1,7 +1,9 @@
 use derive_more::Display;
 use std::net::IpAddr;
 
+pub mod automaton;
 pub mod regex;
+pub mod simd;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ParseResult {

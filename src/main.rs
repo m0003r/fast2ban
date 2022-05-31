@@ -1,17 +1,28 @@
-use crate::parser::regex::RegexParser;
-use crate::parser::*;
-use crate::ban_buffer::RingBanBuffer;
+extern crate core;
 
+#[cfg(feature = "automaton")]
+use crate::automaton::Automaton;
+
+#[cfg(all(not(feature = "automaton"), not(feature = "simd")))]
+use crate::parser::regex::RegexParser;
+#[cfg(any(not(feature = "mmap"), not(feature="simd")))]
+use std::io::BufRead;
+
+use crate::ban_buffer::RingBanBuffer;
+use crate::parser::*;
+use crate::reader::*;
+
+use crate::simd::SimdParser;
 use serde_derive::Deserialize;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::env::args;
-use std::fs::File;
-use std::io::{self, prelude::*, BufReader};
+use std::io;
 use std::net::IpAddr;
 
-mod parser;
 mod ban_buffer;
+mod parser;
+mod reader;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -36,28 +47,50 @@ fn main() -> io::Result<()> {
     let config = read_config(&config_file);
     eprintln!("Config: {:#?}", config);
 
-    let reader: Box<dyn BufRead>;
-    if config.log_file == "-" {
-        reader = Box::new(BufReader::new(io::stdin()));
-    } else {
-        reader = Box::new(BufReader::new(
-            File::open(config.log_file).expect("Failed to open log file"),
-        ));
+    #[cfg(all(feature = "automaton", feature = "simd"))]
+    {
+        compile_error!("Only automaton OR simd allowed")
     }
 
-    let parser =
-        RegexParser::new(&config.log_regex, &config.date_format).expect("Failed to parse regex");
+    let reader;
+    let parser;
+    #[cfg(feature = "automaton")]
+    {
+        reader = create_buf_reader(&config.log_file)
+            .split(b'\n')
+            .map(|line| line.unwrap());;
+        parser = Automaton {};
+    }
+
+    #[cfg(feature = "simd")]
+    {
+        #[cfg(feature = "mmap")]
+        {
+            reader = create_mmap_memchr_iter(&config.log_file);
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            reader = create_buf_reader(&config.log_file)
+                .split(b'\n')
+                .map(|line| line.unwrap());
+        }
+        parser = SimdParser::new();
+    }
+
+    #[cfg(all(not(feature = "automaton"), not(feature = "simd")))]
+    {
+        reader = create_buf_reader(&config.log_file)
+            .lines()
+            .map(|line| line.unwrap());
+        parser = RegexParser::new(&config.log_regex, &config.date_format)
+            .expect("Failed to parse regex");
+    }
 
     let start = std::time::Instant::now();
     let mut ban_tickets = HashMap::<IpAddr, RingBanBuffer>::new();
     let mut line_count = 0;
 
-    for line in reader.lines() {
-        if let Err(_) = line {
-            eprintln!("Line read error, break!");
-            break;
-        }
-        let line = line?;
+    for line in reader {
         line_count += 1;
         if let Ok(ParseResult { ip, timestamp: dt }) = parser.parse_line(&line) {
             let entry = ban_tickets.entry(ip);

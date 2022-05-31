@@ -1,3 +1,5 @@
+#![cfg(all(not(feature = "automaton"), not(feature = "simd")))]
+
 use crate::parser::{LineParser, ParseError, ParseResult};
 use chrono::*;
 use derive_more::Display;
@@ -102,10 +104,10 @@ mod tests {
             ParseResult {
                 ip: IpAddr::V4(Ipv4Addr::new(12, 13, 156, 113)),
                 timestamp: chrono::DateTime::<FixedOffset>::from_utc(
-                    NaiveDate::from_ymd(2022, 5, 25)
-                        .and_hms(7, 36, 11),
+                    NaiveDate::from_ymd(2022, 5, 25).and_hms(7, 36, 11),
                     FixedOffset::west(3 * 3600),
-                ).timestamp()
+                )
+                .timestamp()
             }
         );
     }
