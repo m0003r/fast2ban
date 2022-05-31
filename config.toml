@@ -2,7 +2,7 @@
 log_file = 'nginx.log'
 
 # regexp for parsing log file. Must contain groups <ip> and <DT>
-log_regex = '^(?P<ip>\d+\.\d+\.\d+\.\d+) - [^ ]+ \[(?P<DT>[^\]]+)\] "(\w+) (?P<addr>[^ ]*) HTTP/[\d.]+" (?P<code>\d+) \d+ "[^"]+" "[^"]+" "(?P<UA>[^"]+)'
+log_regex = '^(?P<ip>\d+\.\d+\.\d+\.\d+) - [^ ]+ \[(?P<DT>[^\]]+)\]'
 
 # maximum number of requests for specific IP for specific time period
 requests = 30

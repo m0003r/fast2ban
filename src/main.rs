@@ -1,47 +1,27 @@
-use chrono::{DateTime, Duration, FixedOffset};
-use regex::Regex;
+use crate::parser::regex::RegexParser;
+use crate::parser::*;
+use crate::ban_buffer::RingBanBuffer;
+
 use serde_derive::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::env::args;
 use std::fs::File;
 use std::io::{self, prelude::*, BufReader};
 use std::net::IpAddr;
 
-struct RingBanBuffer {
-    last_queries: Vec<Option<DateTime<FixedOffset>>>,
-    last_query_index: usize,
-}
-
-impl RingBanBuffer {
-    fn new(ring_size: usize) -> RingBanBuffer {
-        RingBanBuffer {
-            last_queries: vec![None; ring_size],
-            last_query_index: 0,
-        }
-    }
-
-    fn add_query(&mut self, query: DateTime<FixedOffset>) -> Option<Duration> {
-        self.last_queries[self.last_query_index] = Some(query);
-        self.last_query_index = (self.last_query_index + 1) % self.last_queries.len();
-
-        if let Some(prev) = self.last_queries[self.last_query_index] {
-            Some(prev - query)
-        } else {
-            None
-        }
-    }
-}
+mod parser;
+mod ban_buffer;
 
 #[derive(Deserialize, Debug)]
 struct Config {
     log_file: String,
     log_regex: String,
     requests: usize,
-    period: usize,
+    period: u32,
     date_format: String,
 }
 
-// read config from TOML file and return a Config struct
 fn read_config(config_file: &str) -> Config {
     let config_str = std::fs::read_to_string(config_file)
         .expect(format!("Failed to read config file {}", config_file).as_str());
@@ -65,20 +45,12 @@ fn main() -> io::Result<()> {
         ));
     }
 
-    if !&config.log_regex.contains("(?P<ip>") {
-        panic!("log_regex must contain (?P<ip> ... ) group for IP address");
-    }
-    if !&config.log_regex.contains("(?P<DT>") {
-        panic!("log_regex must contain (?P<DT> ... ) group for datetime");
-    }
-    let re = Regex::new(&config.log_regex).expect("Failed to compile regex");
+    let parser =
+        RegexParser::new(&config.log_regex, &config.date_format).expect("Failed to parse regex");
 
     let start = std::time::Instant::now();
-    // let mut uas = HashSet::new();
-    let mut banned = HashSet::new();
-    let mut ban_tickets = HashMap::new();
+    let mut ban_tickets = HashMap::<IpAddr, RingBanBuffer>::new();
     let mut line_count = 0;
-    let mut dt_errors = 0;
 
     for line in reader.lines() {
         if let Err(_) = line {
@@ -87,48 +59,45 @@ fn main() -> io::Result<()> {
         }
         let line = line?;
         line_count += 1;
-        let captures = re.captures(&line);
-        if let Some(caps) = captures {
-            let dt = DateTime::parse_from_str(&caps["DT"], &config.date_format);
-            if let Err(_) = dt {
-                eprintln!("Failed to parse date {}", &caps["DT"]);
-                dt_errors += 1;
-                continue;
-            }
-            let dt = dt.unwrap();
-            //parse ip into ipv4
-            let ip = caps["ip"].parse();
-            if let Err(_) = ip {
-                eprintln!("Failed to parse ip {}", &caps["ip"]);
-                continue;
-            }
-            let ip: IpAddr = ip.unwrap();
-            if banned.contains(&ip) {
-                continue;
-            }
-            let duration = ban_tickets
-                .entry(ip)
-                .or_insert(RingBanBuffer::new(config.requests))
-                .add_query(dt);
-            if let Some(dur) = duration {
-                if dur < Duration::seconds(config.period as i64) {
-                    banned.insert(ip);
+        if let Ok(ParseResult { ip, timestamp: dt }) = parser.parse_line(&line) {
+            let entry = ban_tickets.entry(ip);
+            if let Entry::Occupied(mut entry) = entry {
+                let mut buffer = entry.get_mut();
+                if buffer.banned {
+                    continue;
                 }
+                let duration = buffer.add_query(dt);
+                if let Some(dur) = duration {
+                    if dur <= config.period as i64 {
+                        buffer.banned = true;
+                    }
+                }
+            } else {
+                let mut buffer = RingBanBuffer::new(config.requests);
+                buffer.add_query(dt);
+                entry.or_insert(buffer);
             }
         }
     }
+
     let elapsed = start.elapsed();
+
+    let banned_ips: Vec<&IpAddr> = ban_tickets
+        .iter()
+        .filter(|(_, v)| v.banned)
+        .map(|(k, _)| k)
+        .collect();
+
     eprintln!(
-        "elapsed {} ms, {} lines parsed, {} datetime errors, {} lines/s, banned = {}/{}",
+        "elapsed {} ms, {} lines parsed, {} lines/s, banned = {}/{}",
         elapsed.as_millis(),
         line_count,
-        dt_errors,
         line_count as f64 / (elapsed.as_millis() as f64 / 1000.0),
-        banned.len(),
+        banned_ips.len(),
         ban_tickets.len()
     );
 
-    for i in banned {
+    for i in banned_ips {
         println!("{}", i);
     }
     Ok(())
