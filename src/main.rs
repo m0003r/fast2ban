@@ -3,7 +3,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::from_utf8_unchecked;
 
 struct RingBanBuffer {
@@ -103,6 +103,43 @@ fn parse_line_automata_time_only(line: &[u8], time_format: &str) -> Option<Parse
     Some(ParseResult { ip, timestamp })
 }
 
+fn parse_line_v2(line: &[u8]) -> Option<ParseResult> {
+    let mut ip = 0u32;
+    let mut cur_grp = 0u32;
+    let mut timestamp = 0i64;
+    let mut cur_time = 0i64;
+
+    let mut iter = line.iter();
+    for c in iter.by_ref() {
+        if *c == b'.' {
+            ip = ip * 256 + cur_grp;
+            cur_grp = 0;
+            continue;
+        }
+        if *c == b' ' {
+            break;
+        }
+        cur_grp = cur_grp * 10 + (*c - b'0') as u32;
+    }
+    ip = ip * 256 + cur_grp;
+
+    let iter = iter.skip(3).skip_while(|c| **c != b' ').skip_while(|c| **c != b':');
+    for c in iter {
+        if *c == b':' {
+            timestamp = timestamp * 60 + cur_time;
+            cur_time = 0;
+            continue;
+        }
+        if *c == b' ' {
+            break;
+        }
+        cur_time = cur_time * 10 + (*c - b'0') as i64;
+    }
+    timestamp = timestamp * 60 + cur_time;
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::from(ip));
+    Some(ParseResult { ip, timestamp })
+}
+
 fn main() {
     let reader = BufReader::new(File::open("nginx.log").unwrap());
 
@@ -114,7 +151,7 @@ fn main() {
         line_count += 1;
         if let Some(ParseResult { ip, timestamp }) = line
             .ok()
-            .and_then(|l| parse_line_automata_time_only(&l, "%H:%M:%S"))
+            .and_then(|l| parse_line_v2(&l))
         {
             let entry = requests
                 .entry(ip)
