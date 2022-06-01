@@ -1,12 +1,14 @@
 use chrono::*;
 use regex::Regex;
 use std::arch::x86_64::*;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::from_utf8_unchecked;
 use memchr::memchr;
+use memmap::MmapOptions;
 
 struct RingBanBuffer {
     timestamps: Vec<Option<i64>>,
@@ -220,7 +222,7 @@ fn parse_time_simd(x: &[u8]) -> u32 {
     }
 }
 
-fn parse_line_simd(line: &[u8]) -> Option<ParseResult> {
+fn parse_line_simd(line: &[u8]) -> Option<(ParseResult, usize)> {
     let ip = parse_ip_simd(&line[..16]);
 
     let first_space = memchr(b' ', &line[7..])? + 7;
@@ -228,21 +230,24 @@ fn parse_line_simd(line: &[u8]) -> Option<ParseResult> {
     let time_begin = memchr(b':', &line[second_space..])? + second_space + 1;
     let timestamp = parse_time_simd(&line[time_begin..time_begin + 8]) as i64;
 
-    Some(ParseResult { ip, timestamp })
+    Some((ParseResult { ip, timestamp }, time_begin + 8))
 }
 
 fn main() {
     init_shuffle_table();
 
-    let reader = BufReader::new(File::open("nginx.log").unwrap());
-
     let mut requests: HashMap<IpAddr, (RingBanBuffer, bool)> = HashMap::new();
-
     let mut line_count = 0;
+
+    let reader = unsafe { MmapOptions::new().map(&File::open("nginx.log").unwrap()).unwrap() };
+    let mut start_pos = 0;
+    let mut remains = reader.len();
     let start = std::time::Instant::now();
-    for line in reader.split(b'\n') {
-        line_count += 1;
-        if let Some(ParseResult { ip, timestamp }) = line.ok().and_then(|l| parse_line_simd(&l)) {
+    loop {
+        let line = &reader[start_pos..start_pos + min(remains, 512)];
+        if let Some((ParseResult { ip, timestamp }, shift)) = parse_line_simd(line) {
+            start_pos += shift;
+            remains -= shift;
             let entry = requests
                 .entry(ip)
                 .or_insert((RingBanBuffer::new(30), false));
@@ -251,6 +256,18 @@ fn main() {
                     entry.1 = true;
                 }
             };
+        }
+        let next_line = memchr(b'\n', &reader[start_pos..]);
+        if next_line.is_none() {
+            break;
+        }
+        let shift = next_line.unwrap() + 1;
+        start_pos += shift;
+        remains -= shift;
+        line_count += 1;
+
+        if remains < 16 {
+            break;
         }
     }
 
