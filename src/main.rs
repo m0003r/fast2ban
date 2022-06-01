@@ -58,7 +58,7 @@ fn main() -> io::Result<()> {
     {
         reader = create_buf_reader(&config.log_file)
             .split(b'\n')
-            .map(|line| line.unwrap());;
+            .map(|line| line.unwrap());
         parser = Automaton {};
     }
 

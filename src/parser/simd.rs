@@ -88,6 +88,7 @@ impl SimdParser {
     }
 }
 impl LineParser<&[u8]> for SimdParser {
+    #[inline(always)]
     fn parse_line(&self, line: &[u8]) -> Result<ParseResult, ParseError> {
         let ip = self.parse_ip_simd(&line[..16]);
 

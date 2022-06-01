@@ -23,6 +23,7 @@ pub fn create_mmap_memchr_iter<'a, 'b>(filename: &'a str) -> impl Iterator<Item 
             .unwrap()
     };
     let mut start_pos = 0;
+
     std::iter::from_fn(move || {
         let next_line = memchr(b'\n', &reader[start_pos..]);
         if next_line.is_none() {
