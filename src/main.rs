@@ -1,9 +1,10 @@
+use chrono::*;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use chrono::*;
-use regex::Regex;
 use std::net::IpAddr;
+use std::str::from_utf8_unchecked;
 
 struct RingBanBuffer {
     timestamps: Vec<Option<i64>>,
@@ -47,27 +48,54 @@ impl RegexParser {
 
     fn parse_line(&self, line: &str) -> Option<ParseResult> {
         let caps = self.regex.captures(line)?;
-        let timestamp = DateTime::parse_from_str(&caps["DT"], &self.date_format).ok()?.timestamp();
+        let timestamp = DateTime::parse_from_str(&caps["DT"], &self.date_format)
+            .ok()?
+            .timestamp();
         let ip: IpAddr = caps["ip"].parse().ok()?;
         Some(ParseResult { ip, timestamp })
     }
 }
 
+fn parse_line_automata(line: &[u8], date_format: &str) -> Option<ParseResult> {
+    let mut iter = line.iter().enumerate();
+    let ip_end = iter.position(|(_, &c)| c == b' ')?;
+
+    let ip_str = unsafe { from_utf8_unchecked(&line[..ip_end]) };
+    let ip: IpAddr = ip_str.parse().ok()?;
+
+    let mut iter = iter
+        .skip(3)
+        .skip_while(|&(_, &c)| c != b' ')
+        .skip_while(|&(_, &c)| c != b'[');
+
+    let (date_start, _) = iter.next()?;
+    let date_end = iter.position(|(_, &c)| c == b']')?;
+
+    let date = unsafe { from_utf8_unchecked(&line[date_start + 1..date_start + date_end + 1]) };
+
+    let timestamp = DateTime::parse_from_str(date, date_format)
+        .ok()?
+        .timestamp();
+
+    Some(ParseResult { ip, timestamp })
+}
+
 fn main() {
     let reader = BufReader::new(File::open("nginx.log").unwrap());
-    let parser = RegexParser::new(
-        r"^(?P<ip>[\d.]+) - [^ ]+ \[(?P<DT>[^\]]+)\]",
-        "%d/%B/%Y:%H:%M:%S %z",
-    );
 
     let mut requests: HashMap<IpAddr, (RingBanBuffer, bool)> = HashMap::new();
 
     let mut line_count = 0;
     let start = std::time::Instant::now();
-    for line in reader.lines() {
+    for line in reader.split(b'\n') {
         line_count += 1;
-        if let Some(ParseResult { ip, timestamp }) = line.ok().and_then(|l| parser.parse_line(&l) ) {
-            let entry = requests.entry(ip).or_insert((RingBanBuffer::new(30), false));
+        if let Some(ParseResult { ip, timestamp }) = line
+            .ok()
+            .and_then(|l| parse_line_automata(&l, "%d/%B/%Y:%H:%M:%S %z"))
+        {
+            let entry = requests
+                .entry(ip)
+                .or_insert((RingBanBuffer::new(30), false));
             if let Some(delta) = entry.0.add_query(timestamp) {
                 if delta < 30 {
                     entry.1 = true;
@@ -78,7 +106,8 @@ fn main() {
 
     let elapsed = start.elapsed();
 
-    let banned_ips: Vec<&IpAddr> = requests.iter()
+    let banned_ips: Vec<&IpAddr> = requests
+        .iter()
         .filter(|(_, (_, banned))| *banned)
         .map(|(k, _)| k)
         .collect();
