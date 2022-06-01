@@ -80,6 +80,29 @@ fn parse_line_automata(line: &[u8], date_format: &str) -> Option<ParseResult> {
     Some(ParseResult { ip, timestamp })
 }
 
+fn parse_line_automata_time_only(line: &[u8], time_format: &str) -> Option<ParseResult> {
+    let mut iter = line.iter().enumerate();
+    let ip_end = iter.position(|(_, &c)| c == b' ')?;
+
+    let ip_str = unsafe { from_utf8_unchecked(&line[..ip_end]) };
+    let ip: IpAddr = ip_str.parse().ok()?;
+
+    let mut iter = iter
+        .skip(3)
+        .skip_while(|&(_, &c)| c != b' ')
+        .skip_while(|&(_, &c)| c != b':');
+
+    let (date_start, _) = iter.next()?;
+
+    let time = unsafe { from_utf8_unchecked(&line[date_start + 1..date_start + 9]) };
+
+    let timestamp = NaiveTime::parse_from_str(time, time_format)
+        .ok()?
+        .num_seconds_from_midnight() as i64;
+
+    Some(ParseResult { ip, timestamp })
+}
+
 fn main() {
     let reader = BufReader::new(File::open("nginx.log").unwrap());
 
@@ -91,7 +114,7 @@ fn main() {
         line_count += 1;
         if let Some(ParseResult { ip, timestamp }) = line
             .ok()
-            .and_then(|l| parse_line_automata(&l, "%d/%B/%Y:%H:%M:%S %z"))
+            .and_then(|l| parse_line_automata_time_only(&l, "%H:%M:%S"))
         {
             let entry = requests
                 .entry(ip)
