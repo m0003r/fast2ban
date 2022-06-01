@@ -1,10 +1,12 @@
 use chrono::*;
 use regex::Regex;
+use std::arch::x86_64::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::from_utf8_unchecked;
+use memchr::memchr;
 
 struct RingBanBuffer {
     timestamps: Vec<Option<i64>>,
@@ -123,7 +125,10 @@ fn parse_line_v2(line: &[u8]) -> Option<ParseResult> {
     }
     ip = ip * 256 + cur_grp;
 
-    let iter = iter.skip(3).skip_while(|c| **c != b' ').skip_while(|c| **c != b':');
+    let iter = iter
+        .skip(3)
+        .skip_while(|c| **c != b' ')
+        .skip_while(|c| **c != b':');
     for c in iter {
         if *c == b':' {
             timestamp = timestamp * 60 + cur_time;
@@ -140,7 +145,95 @@ fn parse_line_v2(line: &[u8]) -> Option<ParseResult> {
     Some(ParseResult { ip, timestamp })
 }
 
+static mut SHUFFLE_TABLE: [__m128i; 65536] = [unsafe { std::mem::transmute(0_i128) }; 65536];
+
+fn parse_ip_simd(addr: &[u8]) -> IpAddr {
+    let result: u32;
+    unsafe {
+        let input = _mm_lddqu_si128(addr.as_ptr() as *const __m128i);
+        let input = _mm_sub_epi8(input, _mm_set1_epi8(b'0' as i8));
+        let cmp = input;
+        let mask = _mm_movemask_epi8(cmp);
+        let shuf = SHUFFLE_TABLE[mask as usize];
+        let arr = _mm_shuffle_epi8(input, shuf);
+        let coeffs = _mm_set_epi8(0, 100, 10, 1, 0, 100, 10, 1, 0, 100, 10, 1, 0, 100, 10, 1);
+        let prod = _mm_maddubs_epi16(coeffs, arr);
+        let prod = _mm_hadd_epi16(prod, prod);
+        let imm = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 6, 4, 2, 0);
+        let prod = _mm_shuffle_epi8(prod, imm);
+        result = std::mem::transmute(_mm_extract_epi32::<0>(prod))
+    }
+    IpAddr::V4(Ipv4Addr::from(result))
+}
+
+fn init_shuffle_table() {
+    for len0 in 1..4 {
+        for len1 in 1..4 {
+            for len2 in 1..4 {
+                for len3 in 1..4 {
+                    let slen = len0 + len1 + len2 + len3 + 4;
+                    let lens = [&len0, &len1, &len2, &len3];
+                    let rem = 16 - slen;
+                    for rmask in 0..(1 << rem) {
+                        let mut mask = 0;
+                        let mut shuf: [i8; 16] = [-1; 16];
+                        let mut pos = 0;
+                        for i in 0..4 {
+                            for j in 0..*lens[i] {
+                                shuf[((3 - i) * 4 + (lens[i] - 1 - j))] = pos;
+                                pos += 1;
+                            }
+                            mask ^= (1) << pos;
+                            pos += 1;
+                        }
+                        mask ^= rmask << slen;
+                        unsafe {
+                            _mm_store_si128(
+                                &mut SHUFFLE_TABLE[mask],
+                                _mm_loadu_si128(&shuf as *const i8 as *const __m128i),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_time_simd(x: &[u8]) -> u32 {
+    unsafe {
+        let input = _mm_loadu_si64(x.as_ptr() as *const _);
+        let input = _mm_sub_epi8(input, _mm_set1_epi8(b'0' as i8));
+        let input = _mm_shuffle_epi8(
+            input,
+            _mm_set_epi8(7, 6, 4, 3, -1, -1, -1, -1, 1, 0, -1, -1, -1, -1, -1, -1),
+        );
+        let coeffs = _mm_set_epi8(1, 10, 1, 10, 1, 10, 0, 0, 1, 10, 0, 0, 0, 0, 0, 0);
+        let prod = _mm_maddubs_epi16(coeffs, input);
+        let prod2 = _mm_madd_epi16(
+            prod,
+            _mm_set_epi8(0, 1, 0, 60, 0, 0, 0, 0, 14, 16, 0, 0, 0, 0, 0, 0),
+        );
+        let ms: u32 = std::mem::transmute(_mm_extract_epi32::<1>(prod2));
+        let h: u32 = std::mem::transmute(_mm_extract_epi32::<3>(prod2));
+        ms + h
+    }
+}
+
+fn parse_line_simd(line: &[u8]) -> Option<ParseResult> {
+    let ip = parse_ip_simd(&line[..16]);
+
+    let first_space = memchr(b' ', &line[7..])? + 7;
+    let second_space = memchr(b' ', &line[(first_space + 3)..])? + first_space + 3;
+    let time_begin = memchr(b':', &line[second_space..])? + second_space + 1;
+    let timestamp = parse_time_simd(&line[time_begin..time_begin + 8]) as i64;
+
+    Some(ParseResult { ip, timestamp })
+}
+
 fn main() {
+    init_shuffle_table();
+
     let reader = BufReader::new(File::open("nginx.log").unwrap());
 
     let mut requests: HashMap<IpAddr, (RingBanBuffer, bool)> = HashMap::new();
@@ -149,10 +242,7 @@ fn main() {
     let start = std::time::Instant::now();
     for line in reader.split(b'\n') {
         line_count += 1;
-        if let Some(ParseResult { ip, timestamp }) = line
-            .ok()
-            .and_then(|l| parse_line_v2(&l))
-        {
+        if let Some(ParseResult { ip, timestamp }) = line.ok().and_then(|l| parse_line_simd(&l)) {
             let entry = requests
                 .entry(ip)
                 .or_insert((RingBanBuffer::new(30), false));
