@@ -4,8 +4,8 @@ This is simple fail2ban-like replacement written in Rust.
 
 ## Usage:
 ```bash
-./fastban # reads default config.toml from current directory
-./fastban <config.toml location>
+./fast2ban # reads default config.toml from current directory
+./fast2ban <config.toml location>
 ```
 
 Emits list of suspicious IPs to stdout, one per line, some information to stderr:
@@ -63,15 +63,15 @@ iptables -I INPUT -p tcp -m multiport --dports 80,443 -m set --match-set banner 
 # get last queries
 tail -n 500000 /var/log/nginx/access.log | grep '/ HTTP/' > nginx.log
 # create suspicious IPs list
-./fastban > ips.txt
+./fast2ban > ips.txt
 # create restore file for IPset
 cat ips.txt xargs -n1 echo add banner > ipset-restore.txt
 # add IPs to IPset 
 ipset restore -exist < ipset-restore.txt
 
 # or in single line:
-tail -n 500000 /var/log/nginx/access.log | grep '/ HTTP/' > nginx.log && ./fastban | xargs -n1 echo add banner | ipset restore -exist
+tail -n 500000 /var/log/nginx/access.log | grep '/ HTTP/' > nginx.log && ./fast2ban | xargs -n1 echo add banner | ipset restore -exist
 
 # or if using log_file = '-' to read from stdin:
-tail -n 500000 /var/log/nginx/access.log | grep '/ HTTP/' | ./fastban | xargs -n1 echo add banner | ipset restore -exist
+tail -n 500000 /var/log/nginx/access.log | grep '/ HTTP/' | ./fast2ban | xargs -n1 echo add banner | ipset restore -exist
 ```
