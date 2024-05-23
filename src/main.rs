@@ -5,7 +5,7 @@ use crate::automaton::Automaton;
 
 #[cfg(all(not(feature = "automaton"), not(feature = "simd")))]
 use crate::parser::regex::RegexParser;
-#[cfg(any(not(feature = "mmap"), not(feature="simd")))]
+#[cfg(any(not(feature = "mmap"), not(feature = "simd")))]
 use std::io::BufRead;
 
 use crate::ban_buffer::RingBanBuffer;
@@ -31,6 +31,7 @@ struct Config {
     requests: usize,
     period: u32,
     date_format: String,
+    secret: Option<String>,
 }
 
 fn read_config(config_file: &str) -> Config {
@@ -86,16 +87,28 @@ fn main() -> io::Result<()> {
             .expect("Failed to parse regex");
     }
 
+    let secret = config.secret.map(|s| {
+        let f = format!("{}{}", chrono::Utc::now().format("%Y%m%d"), s);
+        format!("{:x}", md5::compute(f))
+    });
+
     let start = std::time::Instant::now();
     let mut ban_tickets = HashMap::<IpAddr, RingBanBuffer>::new();
     let mut line_count = 0;
 
     for line in reader {
         line_count += 1;
+
         if let Ok(ParseResult { ip, timestamp: dt }) = parser.parse_line(&line) {
+            let has_secret = secret.as_ref().map(|s| line.contains(s)).unwrap_or(false);
+
             let entry = ban_tickets.entry(ip);
             if let Entry::Occupied(mut entry) = entry {
                 let mut buffer = entry.get_mut();
+                if has_secret {
+                    buffer.whitelisted = true;
+                    continue;
+                }
                 if buffer.banned {
                     continue;
                 }
@@ -107,7 +120,11 @@ fn main() -> io::Result<()> {
                 }
             } else {
                 let mut buffer = RingBanBuffer::new(config.requests);
-                buffer.add_query(dt);
+                if has_secret {
+                    buffer.whitelisted = true;
+                } else {
+                    buffer.add_query(dt);
+                }
                 entry.or_insert(buffer);
             }
         }
@@ -117,7 +134,7 @@ fn main() -> io::Result<()> {
 
     let banned_ips: Vec<&IpAddr> = ban_tickets
         .iter()
-        .filter(|(_, v)| v.banned)
+        .filter(|(_, v)| v.banned && !v.whitelisted)
         .map(|(k, _)| k)
         .collect();
 

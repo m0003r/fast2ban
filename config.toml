@@ -13,3 +13,6 @@ period = 30
 # date format (see https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html for syntax).
 # Note that timezone is required (because of using https://docs.rs/chrono/0.4.19/chrono/struct.DateTime.html#method.parse_from_str method)
 date_format = '%d/%B/%Y:%H:%M:%S %z'
+
+# pass current date as YYYYMMDD concatendated with secret to whitelist IP
+whitelist_secret = 'secret'

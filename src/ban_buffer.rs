@@ -3,6 +3,7 @@ pub(crate) struct RingBanBuffer {
     timestamps: Vec<Option<i64>>,
     last_index: usize,
     pub banned: bool,
+    pub whitelisted: bool,
 }
 
 impl RingBanBuffer {
@@ -11,6 +12,7 @@ impl RingBanBuffer {
             timestamps: vec![None; ring_size],
             last_index: 0,
             banned: false,
+            whitelisted: false,
         }
     }
 
