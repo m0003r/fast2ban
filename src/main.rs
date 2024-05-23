@@ -47,7 +47,12 @@ fn main() -> io::Result<()> {
     // read config
     let config = read_config(&config_file);
     eprintln!("Config: {:#?}", config);
+    let secret = config.secret.map(|s| {
+        let f = format!("{}{}", chrono::Utc::now().format("%Y%m%d"), s);
+        format!("{:x}", md5::compute(f))
+    });
 
+    dbg!(&secret);
     #[cfg(all(feature = "automaton", feature = "simd"))]
     {
         compile_error!("Only automaton OR simd allowed")
@@ -87,10 +92,7 @@ fn main() -> io::Result<()> {
             .expect("Failed to parse regex");
     }
 
-    let secret = config.secret.map(|s| {
-        let f = format!("{}{}", chrono::Utc::now().format("%Y%m%d"), s);
-        format!("{:x}", md5::compute(f))
-    });
+
 
     let start = std::time::Instant::now();
     let mut ban_tickets = HashMap::<IpAddr, RingBanBuffer>::new();
